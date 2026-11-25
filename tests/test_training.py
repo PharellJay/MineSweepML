@@ -107,3 +107,34 @@ def test_short_training_session():
     again = Trainer(cfg2, Control(), bot="tiny")
     assert again.run() == "completed"
     assert read_json(trainer.bot_dir / "state.json")["games"] >= state["games"] + 20
+
+
+def test_suspended_time_is_not_training_time(monkeypatch):
+    """A jump of the wall clock (the laptop slept) must not count against a time limit."""
+    import threading
+    import time as real_time
+
+    import minesweepml.trainer as trainer_mod
+
+    class Clock:
+        offset = 0.0
+
+        @staticmethod
+        def time():
+            return real_time.time() + Clock.offset
+
+        sleep = staticmethod(real_time.sleep)
+
+    monkeypatch.setattr(trainer_mod, "time", Clock)
+    threading.Timer(2.0, lambda: setattr(Clock, "offset", 1000.0)).start()
+    cfg = TrainConfig(workers=1, threads=1, parallel_games=4, batch_size=16, min_buffer=100, max_seconds=6,
+                      mix_beginner=1.0, mix_intermediate=0.0, mix_expert=0.0, blocks=1, channels=8,
+                      eval_minutes=0, checkpoint_minutes=60, nice=0, buffer_size=5_000)
+    trainer = Trainer(cfg, Control(), bot="sleepy")
+    start = real_time.time()
+    assert trainer.run() == "completed"
+    assert real_time.time() - start >= 5.5  # it trained for the full limit, not 2 s
+    state = read_json(trainer.bot_dir / "state.json")
+    assert state["elapsed"] < 60
+    events = [s["event"] for s in read_history(trainer.bot_dir)["sessions"]]
+    assert "suspended" in events

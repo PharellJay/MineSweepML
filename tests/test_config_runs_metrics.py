@@ -53,7 +53,7 @@ def test_bot_lifecycle():
     assert renamed.name == "Beta" and not bot.exists()
     assert latest_checkpoint(renamed).parent.parent == renamed
     assert resolve_checkpoint("Beta") == latest_checkpoint(renamed)
-    assert [c["label"] for c in list_checkpoints()] == ["Beta/ckpt_0000000g.pt"]
+    assert [c["label"] for c in list_checkpoints() if c["bot"]] == ["Beta/ckpt_0000000g.pt"]
 
     fork = create_bot("Gamma", from_checkpoint=resolve_checkpoint("Beta/ckpt_0000000g.pt"))
     assert bot_settings(fork)["channels"] == 8 and latest_checkpoint(fork) is not None

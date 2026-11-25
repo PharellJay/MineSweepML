@@ -151,7 +151,9 @@ def benchmark_section(bot_dir: Path) -> tuple[list[str], dict | None]:
     if not mine:
         return [], None
     boards = max(r["boards"] for r in mine)
-    best = [r for r in mine if r["boards"] == boards][-1]
+    top = [r for r in mine if r["boards"] == boards]
+    choice = best_checkpoint(bot_dir, {"evals": []})  # the best of these, as exported to models/best.pt
+    best = next((r for r in reversed(top) if choice and Path(r["path"]).name == choice[0]), top[-1])
     rows = [(f"`{best['player']}`", best)]
     for name, label in (("solver", "rule-based solver"), ("random", "random clicks")):
         base = [r for r in results if r["player"] == name and r["boards"] == boards]
@@ -212,6 +214,10 @@ def results_markdown(bot_dir: Path, h: dict, charts, image_dir: str, hardware: d
     starts = [s["detail"] for s in h["sessions"] if s["event"] == "start"]
     lines.append(f"| Training sessions | {len(starts)}: " + "; ".join(starts) + " |")
     lines.append(f"| Training time | {format_duration(elapsed)} |")
+    suspends = [s for s in h["sessions"] if s["event"] == "suspended"]
+    if suspends:
+        lines.append(f"| Computer suspended | {len(suspends)} time(s) during training; " +
+                     "; ".join(s["detail"] for s in suspends) + " |")
     lines.append(f"| Games played | {games:,} |")
     lines.append(f"| Positions stored | {positions:,} |")
     lines.append(f"| Training steps | {steps:,} (batch {cfg.get('batch_size')}) |")
@@ -240,8 +246,8 @@ def results_markdown(bot_dir: Path, h: dict, charts, image_dir: str, hardware: d
         lines.append("")
     if exported:
         lines += [f"The bundled `models/best.pt` is `{exported['source']}`, the checkpoint with the best "
-                  f"benchmark score during training, saved without optimiser state ({exported['size_mb']:.1f} MB).",
-                  ""]
+                  f"mix-weighted win rate in {exported['basis']}, saved without optimiser state "
+                  f"({exported['size_mb']:.2f} MB).", ""]
 
     if charts:
         lines += ["### Charts", ""]
@@ -252,13 +258,26 @@ def results_markdown(bot_dir: Path, h: dict, charts, image_dir: str, hardware: d
     return "\n".join(lines)
 
 
-def best_checkpoint(bot_dir: Path, h: dict) -> tuple[str, float] | None:
-    """The evaluated checkpoint with the best mix-weighted win rate."""
+def best_checkpoint(bot_dir: Path, h: dict) -> tuple[str, float, str] | None:
+    """The checkpoint with the best mix-weighted win rate, and where that score comes from.
+
+    Full benchmarks (runs/benchmarks.json) of the bot's checkpoints win over the
+    smaller evaluations during training: the largest benchmark size decides.
+    """
+    from .benchmark import load_results
     from .config import TrainConfig
     from .runs import read_json
 
     cfg = TrainConfig.from_dict(read_json(bot_dir / "config.json", {}) or {})
     mix = cfg.mix()
+    mine = [r for r in load_results() if r.get("path") and Path(r["path"]).resolve().parent.parent == bot_dir.resolve()
+            and Path(r["path"]).exists() and all(d in r["difficulties"] for d in mix)]
+    if mine:
+        boards = max(r["boards"] for r in mine)
+        ranked = [(sum(w * r["difficulties"][d]["win_rate"] for d, w in mix.items()), Path(r["path"]).name)
+                  for r in mine if r["boards"] == boards]
+        score, name = max(ranked)
+        return name, score, f"the full benchmark ({boards:,} boards per difficulty)"
     scores: dict[str, list[float]] = {}
     for e in h["evals"]:
         s = scores.setdefault(e["checkpoint"], [0.0, 0.0])
@@ -269,7 +288,7 @@ def best_checkpoint(bot_dir: Path, h: dict) -> tuple[str, float] | None:
     if not ranked:
         return None
     score, name = max(ranked)
-    return name, score
+    return name, score, "the evaluations during training"
 
 
 def export_best_checkpoint(bot_dir: Path, h: dict) -> dict | None:
@@ -280,14 +299,14 @@ def export_best_checkpoint(bot_dir: Path, h: dict) -> dict | None:
     best = best_checkpoint(bot_dir, h)
     if best is None:
         return None
-    name, score = best
+    name, score, basis = best
     data = load_checkpoint(str(bot_dir / "checkpoints" / name))
     MODELS_DIR.mkdir(exist_ok=True)
     dest = MODELS_DIR / "best.pt"
     save_checkpoint(str(dest), model_from_checkpoint(data), games=data.get("games"), steps=data.get("steps"),
                     elapsed=data.get("elapsed"), bot=bot_dir.name, source=name, score=score,
                     config=data.get("config"))
-    return {"path": dest, "source": name, "score": score, "size_mb": dest.stat().st_size / 1e6}
+    return {"path": dest, "source": name, "score": score, "basis": basis, "size_mb": dest.stat().st_size / 1e6}
 
 
 def generate_report(bot: str | None, readme: Path, out_dir: Path, export_best: bool = False) -> None:

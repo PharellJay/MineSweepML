@@ -39,6 +39,8 @@ from .runs import (bot_checkpoints, bot_settings, create_bot, latest_checkpoint,
                    resolve_bot, update_bot, write_json)
 from .workers import worker_main
 
+SUSPEND_GAP = 60.0  # seconds between two loop passes (normally about one) that mean the computer slept
+
 
 class Control:
     """Pause/stop flags shared by the controller and the training processes,
@@ -290,8 +292,14 @@ class Trainer:
             while True:
                 now = time.time()
                 paused = self.control.pause.is_set()
+                step = now - last_tick
+                if step > SUSPEND_GAP:  # the computer slept (or the process was stopped): no training happened
+                    self._note_suspend(step)
+                    last_ckpt += step
+                    last_eval += step
+                    step = 0.0
                 if not paused:
-                    self.active_seconds += now - last_tick
+                    self.active_seconds += step
                 last_tick = now
                 if paused != (state == "paused"):
                     state = "paused" if paused else "running"
@@ -329,6 +337,14 @@ class Trainer:
         finally:
             self._shutdown(reason)
         return reason
+
+    def _note_suspend(self, seconds: float) -> None:
+        from .config import format_duration
+
+        self.db.insert("sessions", {"elapsed": self._elapsed(), "event": "suspended",
+                                    "detail": f"{seconds:.0f}s not counted as training time"})
+        self.emit({"type": "log", "message": f"The computer was suspended for {format_duration(seconds)}; "
+                                            f"that time does not count as training time"})
 
     # -- games ------------------------------------------------------------
 
