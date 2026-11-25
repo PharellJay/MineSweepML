@@ -88,3 +88,35 @@ def move_quality(record: GameRecord) -> dict:
 def visible_stack(record: GameRecord) -> np.ndarray:
     """Every frame's visible board, shape (moves + 1, rows, cols)."""
     return np.stack([board.visible() for board, _ in frames(record)])
+
+
+def replay_payload(record: GameRecord) -> dict:
+    """Everything the web viewer needs to draw any frame: the layout and the cells each move opened."""
+    opened = []
+    board = None
+    for board, cells in frames(record):
+        if cells:
+            opened.append([r * board.spec.cols + c for r, c in cells])
+    spec = board.spec
+    return {
+        "spec": spec.key, "label": spec.label, "rows": spec.rows, "cols": spec.cols, "mines_total": spec.mines,
+        "seed": record.seed, "player": record.player, "result": board.state, "cleared": board.cleared(),
+        "moves": [list(m) for m in record.moves], "opened": opened,
+        "mines": board.mines.astype(int).ravel().tolist(), "counts": board.counts.astype(int).ravel().tolist(),
+    }
+
+
+def frame_probabilities(record: GameRecord, player) -> list[list[int]]:
+    """P(mine) in % for every covered cell before each move (-1 on revealed cells), by `player`.
+
+    `player` is a NetPlayer (one batched pass per 64 positions) or 'solver'.
+    """
+    stack = visible_stack(record)[:-1]  # the positions the moves were played from
+    spec = get_spec(record.spec)
+    if player == "solver":
+        probs = np.stack([analyse(v, spec.mines).prob for v in stack])
+    else:
+        probs = np.concatenate([player.evaluator(stack[i:i + 64], spec.mines) for i in range(0, len(stack), 64)])
+    covered = stack == -1
+    pct = np.where(covered, np.round(np.nan_to_num(probs, nan=0.0) * 100), -1).astype(int)
+    return pct.reshape(len(stack), -1).tolist()

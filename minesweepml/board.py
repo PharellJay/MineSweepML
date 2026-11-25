@@ -120,6 +120,14 @@ def place_mines(spec: Spec, seed: int, first_click: tuple[int, int], safe_neighb
     return mines.reshape(spec.rows, spec.cols)
 
 
+_TEXT = ".012345678*"  # index = visible value + 1
+
+
+def to_text(visible: np.ndarray) -> str:
+    """Compact row-major text of a visible board for the web UI: '.' covered, digits, '*' exploded."""
+    return "".join(_TEXT[v + 1] for v in visible.ravel().tolist())
+
+
 class Board:
     """One game. `reveal` returns the cells it uncovered, in flood-fill order."""
 

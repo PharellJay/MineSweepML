@@ -64,6 +64,43 @@ class SolverPlayer:
         return int(r), int(c)
 
 
+class NetPlayer:
+    """Clicks the covered cell with the lowest P(mine) according to the network.
+
+    Games of the same size share one batched forward pass.
+    """
+
+    def __init__(self, source, name: str | None = None):
+        from pathlib import Path
+
+        from .network import Evaluator, MineNet, model_from_checkpoint
+
+        if isinstance(source, MineNet):
+            model = source
+        else:
+            model = model_from_checkpoint(str(source))
+            name = name or Path(source).stem
+        self.evaluator = Evaluator(model)
+        self.name = name or "net"
+
+    def choose(self, views: list[View]) -> list[tuple[int, int]]:
+        out: list[tuple[int, int]] = [(0, 0)] * len(views)
+        groups: dict[Spec, list[int]] = {}
+        for i, v in enumerate(views):
+            groups.setdefault(v.spec, []).append(i)
+        for spec, idxs in groups.items():
+            vis = np.stack([views[i].visible for i in idxs])
+            p = self.evaluator(vis, spec.mines)
+            p[vis != COVERED] = np.inf
+            flat = p.reshape(len(idxs), -1).argmin(1)
+            for i, f in zip(idxs, flat):
+                out[i] = (int(f // spec.cols), int(f % spec.cols))
+        return out
+
+    def probabilities(self, visible: np.ndarray, spec: Spec) -> np.ndarray:
+        return self.evaluator.probabilities(visible, spec.mines)
+
+
 BASELINES = ("random", "solver")
 
 
@@ -73,6 +110,16 @@ def make_baseline(name: str, seed: int | None = None):
     if name == "solver":
         return SolverPlayer()
     raise ValueError(f"unknown baseline {name!r}; choose from {', '.join(BASELINES)}")
+
+
+def make_player(spec: str, seed: int | None = None):
+    """'random', 'solver', or a bot name / checkpoint file / checkpoint label."""
+    if spec in BASELINES:
+        return make_baseline(spec, seed)
+    from .runs import checkpoint_label, resolve_checkpoint
+
+    path = resolve_checkpoint(spec)
+    return NetPlayer(path, name=checkpoint_label(path))
 
 
 def play_games(player, spec: str | Spec, seeds, safe_neighbours: bool = True, parallel: int = 32,
