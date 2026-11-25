@@ -1,0 +1,15 @@
+# Local tooling
+.claude/
+CLAUDE.md
+PLAN.md
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Training output (run directories and checkpoints are never committed)
+runs/
+*.pt
+!models/best.pt
