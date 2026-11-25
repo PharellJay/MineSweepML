@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MineSweepML</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>MineSweepML</h1>
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="bots" role="tab">Bots</button>
+    <button class="tab" data-tab="train" role="tab">Train</button>
+    <button class="tab" data-tab="simulate" role="tab">Simulate</button>
+    <button class="tab" data-tab="benchmark" role="tab">Benchmark</button>
+  </nav>
+  <span id="conn" class="conn" title="Live connection">connecting…</span>
+</header>
+
+<main>
+<!-- ============================== BOTS ============================== -->
+<section id="tab-bots" class="tab-panel active">
+  <div class="card">
+    <div class="charts-head">
+      <h2>Bots <span class="muted" id="botCount"></span></h2>
+      <button type="button" class="primary" id="btnNewBot">New bot</button>
+    </div>
+    <div class="table-scroll">
+      <table class="data-table clickable" id="botTable">
+        <thead><tr>
+          <th>Name</th><th class="hide-narrow">Network</th><th class="num">Games</th>
+          <th class="num hide-narrow">Training time</th><th>Status</th><th>Benchmark win rate (B · I · E)</th><th></th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p class="empty-note" id="botsEmpty" hidden>No bots yet. Create one, or start training on the Train tab
+      and a bot is created for you.</p>
+  </div>
+
+  <div class="side-grid" id="botDetail" hidden>
+    <div class="card">
+      <h2 id="bdName">Bot</h2>
+      <dl class="stats" id="bdStats"></dl>
+      <h3>Training settings</h3>
+      <dl class="stats" id="bdSettings"></dl>
+      <div class="buttons">
+        <button type="button" id="bdTrain" class="primary">Train</button>
+        <button type="button" id="bdEdit">Edit</button>
+        <button type="button" id="bdDelete" class="danger">Delete</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Checkpoints <span class="muted" id="bdCkptCount"></span></h2>
+      <ol class="ckpt-list" id="bdCkpts"></ol>
+    </div>
+  </div>
+</section>
+
+<dialog id="botDialog">
+  <form id="botForm" class="dialog-form" autocomplete="off">
+    <h2 id="botDialogTitle">New bot</h2>
+    <label>Name <input type="text" id="bfName" maxlength="60" placeholder="e.g. sweeper-1" required></label>
+    <div id="bfCreateOnly">
+      <label>Start from
+        <select id="bfFrom"><option value="">An untrained network</option></select>
+      </label>
+      <label>Network size
+        <select id="bfSize">
+          <option value="4x32">4×32: smallest, about 1.4× faster</option>
+          <option value="6x32" selected>6×32: default</option>
+          <option value="6x48">6×48: about 2× slower</option>
+          <option value="6x64">6×64: about 3.3× slower</option>
+          <option value="8x64">8×64: about 4.4× slower</option>
+        </select>
+      </label>
+      <p class="hint">The size is fixed once the bot exists. A bot started from a checkpoint keeps that
+        checkpoint's size.</p>
+    </div>
+    <fieldset>
+      <legend>Difficulty mix in training <span class="mix-sum" id="bfMixSum"></span></legend>
+      <div class="grid3">
+        <label>Beginner % <input type="number" id="bfMixB" min="0" max="100" step="1"></label>
+        <label>Intermediate % <input type="number" id="bfMixI" min="0" max="100" step="1"></label>
+        <label>Expert % <input type="number" id="bfMixE" min="0" max="100" step="1"></label>
+      </div>
+    </fieldset>
+    <details>
+      <summary>Learning settings</summary>
+      <div class="grid2">
+        <label>Exploration start % <input type="number" id="bfEpsStart" min="0" max="100" step="0.5"></label>
+        <label>Exploration end % <input type="number" id="bfEpsEnd" min="0" max="100" step="0.5"></label>
+        <label>Exploration decays over (games) <input type="number" id="bfEpsGames" min="0" step="1000"></label>
+        <label>Positions stored % <input type="number" id="bfRecord" min="1" max="100" step="1"></label>
+        <label>Continue after a mine % <input type="number" id="bfForgive" min="0" max="100" step="1"></label>
+        <label>Learning rate <input type="number" id="bfLr" min="0.000001" max="0.1" step="0.0001"></label>
+      </div>
+      <p class="hint">Exploration: the share of moves that click a random covered cell. Continue after a
+        mine: that share of training games carries on with a random safe cell after hitting a mine, so a
+        young bot also sees late positions; such games still count as lost.</p>
+      <label class="toggle"><input type="checkbox" id="bfOpen" checked> First click opens an area (its neighbours are mine-free)</label>
+    </details>
+    <p class="error" id="botError" role="alert"></p>
+    <div class="buttons">
+      <button type="submit" class="primary" id="bfSubmit">Create bot</button>
+      <button type="button" id="bfCancel">Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="deleteDialog">
+  <form method="dialog" class="dialog-form">
+    <h2>Delete bot</h2>
+    <p id="deleteText"></p>
+    <p class="error" id="deleteError" role="alert"></p>
+    <div class="buttons">
+      <button type="button" class="danger" id="deleteConfirm">Delete permanently</button>
+      <button value="cancel">Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ============================== TRAIN ============================== -->
+<section id="tab-train" class="tab-panel">
+  <div class="side-grid">
+    <aside>
+      <div class="card">
+        <h2>Training</h2>
+        <form id="trainForm" autocomplete="off">
+          <label>Bot
+            <select id="trainBot"></select>
+          </label>
+          <p class="hint" id="trainBotInfo"></p>
+          <label id="newBotNameRow" hidden>Name of the new bot <input type="text" id="trainNewName" maxlength="60" placeholder="auto"></label>
+          <label>Intensity preset
+            <select id="preset">
+              <option value="light">Light</option>
+              <option value="balanced" selected>Balanced</option>
+              <option value="heavy">Heavy</option>
+              <option value="hardcore">Hardcore</option>
+            </select>
+          </label>
+          <p class="hint" id="presetHint"></p>
+          <details>
+            <summary>Manual overrides</summary>
+            <div class="grid2">
+              <label>Workers <input type="number" id="workers" min="1" max="256"></label>
+              <label>Torch threads <input type="number" id="threads" min="1" max="64"></label>
+              <label>Batch size <input type="number" id="batch_size" min="1" max="8192"></label>
+              <label>Games per worker <input type="number" id="parallel_games" min="1" max="512" placeholder="32"></label>
+              <label>Niceness <input type="number" id="nice" min="0" max="19"></label>
+              <label>Replay buffer <input type="number" id="buffer_size" min="5000" max="5000000" step="1000"></label>
+              <label>Eval every (min) <input type="number" id="eval_minutes" min="0" step="1" placeholder="10"></label>
+              <label>Eval boards / difficulty <input type="number" id="eval_boards" min="10" step="10" placeholder="200"></label>
+            </div>
+            <p class="hint">Empty fields use the preset value. Workers pause by themselves whenever training
+              falls behind the games they send.</p>
+            <label class="toggle"><input type="checkbox" id="resetLr"> Reset the learning rate</label>
+          </details>
+          <fieldset>
+            <legend>Duration</legend>
+            <label class="radio"><input type="radio" name="duration" value="stop" checked> Until I press Stop</label>
+            <label class="radio"><input type="radio" name="duration" value="games"> Games
+              <input type="number" id="games" min="1" value="20000" class="inline"></label>
+            <label class="radio"><input type="radio" name="duration" value="time"> Time
+              <input type="text" id="time" value="1h" class="inline" placeholder="1h, 90m"></label>
+          </fieldset>
+          <div class="buttons">
+            <button type="submit" id="btnStart" class="primary">Start</button>
+            <button type="button" id="btnPause">Pause</button>
+            <button type="button" id="btnResume">Resume</button>
+            <button type="button" id="btnStop" class="danger">Stop</button>
+          </div>
+          <p class="error" id="trainError" role="alert"></p>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>Status <span id="stateBadge" class="badge">idle</span></h2>
+        <dl class="stats">
+          <dt>Bot</dt><dd id="st-bot">–</dd>
+          <dt>Preset</dt><dd id="st-preset">–</dd>
+          <dt>Network</dt><dd id="st-net">–</dd>
+          <dt>Difficulty mix</dt><dd id="st-mix">–</dd>
+          <dt>Duration</dt><dd id="st-duration">–</dd>
+          <dt>Elapsed</dt><dd id="st-elapsed">–</dd>
+          <dt>ETA</dt><dd id="st-eta">–</dd>
+          <dt>Games played</dt><dd id="st-games">–</dd>
+          <dt>Games / sec</dt><dd id="st-gps">–</dd>
+          <dt>Moves / sec</dt><dd id="st-mps">–</dd>
+          <dt>Positions stored</dt><dd id="st-positions">–</dd>
+          <dt>Training steps</dt><dd id="st-steps">–</dd>
+          <dt>Learning rate</dt><dd id="st-lr">–</dd>
+          <dt>Exploration</dt><dd id="st-eps">–</dd>
+          <dt>Replay buffer</dt><dd id="st-buffer">–</dd>
+          <dt>Checkpoint</dt><dd id="st-ckpt">–</dd>
+          <dt>Last benchmark</dt><dd id="st-eval">–</dd>
+        </dl>
+      </div>
+
+      <div class="card">
+        <h2>Log</h2>
+        <ol id="log" class="log"><li class="placeholder">Training messages appear here while this page is open.</li></ol>
+      </div>
+    </aside>
+
+    <div>
+      <div class="card">
+        <h2>Live training game <span class="muted" id="liveInfo"></span></h2>
+        <div id="liveBoard" class="mine-board"></div>
+        <div class="board-meta">
+          <span class="legend-scale">safe <i></i> mine</span>
+          <span>tint: the network's P(mine) · outline: its next click</span>
+        </div>
+        <h3>All running games <span class="muted" id="gridInfo"></span></h3>
+        <div id="liveGrid" class="mini-grid"></div>
+      </div>
+
+      <div class="card">
+        <div class="charts-head">
+          <h2>Metrics</h2>
+          <label class="inline-label">Bot <select id="chartBot"></select></label>
+        </div>
+        <div class="charts">
+          <figure><figcaption>Loss (binary cross-entropy over covered cells)</figcaption><div id="chLoss" class="chart"></div></figure>
+          <figure><figcaption>Win rate, last 100 training games per difficulty %</figcaption><div id="chWin" class="chart"></div></figure>
+          <figure><figcaption>Benchmark win rate per checkpoint %</figcaption><div id="chEval" class="chart"></div></figure>
+          <figure><figcaption>Safe cells cleared, last 100 training games %</figcaption><div id="chCleared" class="chart"></div></figure>
+          <figure><figcaption>Games / sec</figcaption><div id="chGps" class="chart"></div></figure>
+          <figure><figcaption>Moves / sec (network batches × games)</figcaption><div id="chMps" class="chart"></div></figure>
+          <figure><figcaption>CPU usage, overall %</figcaption><div id="chCpu" class="chart"></div></figure>
+          <figure><figcaption>CPU usage per core, now %</figcaption><div id="chCores" class="chart"></div></figure>
+        </div>
+        <details class="table-view">
+          <summary>Benchmark table</summary>
+          <div class="table-scroll">
+            <table class="data-table">
+              <thead><tr><th class="num">Games</th><th>Checkpoint</th><th>Difficulty</th><th class="num">Boards</th><th class="num">Won</th><th class="num">Cleared</th><th class="num">Moves</th></tr></thead>
+              <tbody id="evalTable"></tbody>
+            </table>
+          </div>
+        </details>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== SIMULATE ============================== -->
+<section id="tab-simulate" class="tab-panel">
+  <div class="side-grid">
+    <aside>
+      <div class="card">
+        <h2>Simulate</h2>
+        <form id="simForm" autocomplete="off">
+          <label>Player <select id="simPlayer"></select></label>
+          <label>Difficulty
+            <select id="simDifficulty">
+              <option value="beginner">Beginner (9×9, 10 mines)</option>
+              <option value="intermediate">Intermediate (16×16, 40 mines)</option>
+              <option value="expert" selected>Expert (30×16, 99 mines)</option>
+              <option value="custom">Custom…</option>
+            </select>
+          </label>
+          <div class="grid3" id="simCustom" hidden>
+            <label>Rows <input type="number" id="simRows" min="2" max="16" value="12"></label>
+            <label>Columns <input type="number" id="simCols" min="2" max="30" value="20"></label>
+            <label>Mines <input type="number" id="simMines" min="1" value="40"></label>
+          </div>
+          <div class="grid2">
+            <label>Seed <input type="number" id="simSeed" min="0" placeholder="random"></label>
+            <label>Games (batch) <input type="number" id="simGames" min="1" max="10000" value="200"></label>
+          </div>
+          <label class="toggle"><input type="checkbox" id="simOpen" checked> First click opens an area</label>
+          <div class="buttons">
+            <button type="button" id="btnPlayOne" class="primary">Play one game</button>
+            <button type="button" id="btnBatch">Simulate batch</button>
+            <button type="button" id="btnSimCancel" class="danger" hidden>Cancel</button>
+          </div>
+          <p class="hint">A batch plays games on seeds seed, seed+1, … (from 0 if empty) in parallel processes.
+            Click a game in the list to replay it.</p>
+          <div class="progress" id="simProgress" hidden><div class="progress-fill"></div></div>
+          <p class="error" id="simError" role="alert"></p>
+        </form>
+      </div>
+      <div class="card" id="simResults" hidden>
+        <h2>Batch result <span class="muted" id="simResultInfo"></span></h2>
+        <dl class="stats" id="simSummary"></dl>
+        <h3>Games</h3>
+        <label class="inline-label"><select id="simFilter">
+          <option value="all">All games</option><option value="won">Won</option><option value="lost">Lost</option>
+        </select></label>
+        <div class="table-scroll tall">
+          <table class="data-table clickable">
+            <thead><tr><th class="num">Seed</th><th>Result</th><th class="num">Moves</th><th class="num">Cleared</th></tr></thead>
+            <tbody id="simGamesTable"></tbody>
+          </table>
+        </div>
+      </div>
+    </aside>
+
+    <div class="card">
+      <h2>Replay <span class="muted" id="rpInfo">Play a game to watch it here.</span>
+        <span class="badge" id="rpBadge" hidden></span></h2>
+      <div id="rpBoard" class="mine-board"></div>
+      <div class="player-controls">
+        <button type="button" id="rpStart" title="First frame">⏮</button>
+        <button type="button" id="rpBack" title="Step back (←)">◀</button>
+        <button type="button" id="rpPlay" class="primary" title="Play / pause (space)">▶</button>
+        <button type="button" id="rpFwd" title="Step forward (→)">▶▶</button>
+        <button type="button" id="rpEnd" title="Last frame">⏭</button>
+        <div class="grow"><input type="range" id="rpScrub" min="0" max="0" value="0" aria-label="Move"></div>
+        <span class="frame-counter" id="rpFrame">–</span>
+      </div>
+      <div class="player-controls">
+        <label class="inline-label">Speed
+          <select id="rpSpeed" class="speed-select">
+            <option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option>
+            <option value="2">2×</option><option value="5">5×</option><option value="10">10×</option>
+            <option value="50">50×</option><option value="100">100×</option><option value="1000">1000×</option>
+            <option value="instant">Instant</option>
+          </select>
+        </label>
+        <span class="hint" style="margin:0">1× = 5 moves per second</span>
+      </div>
+      <div class="toggles">
+        <label class="toggle"><input type="checkbox" id="rpOverlay"> P(mine) overlay</label>
+        <label class="inline-label">from <select id="rpOverlaySource" class="speed-select">
+          <option value="player">the player</option><option value="solver">the solver</option>
+        </select></label>
+        <label class="toggle"><input type="checkbox" id="rpNext" checked> Highlight the next click</label>
+      </div>
+      <div class="board-meta" id="rpMeta"></div>
+      <div class="buttons">
+        <label class="inline-label">GIF speed <input type="number" id="gifFps" min="1" max="50" value="8" class="inline"> moves/s</label>
+        <button type="button" id="btnGif">Export GIF</button>
+        <span class="hint" id="gifStatus" style="margin:0"></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== BENCHMARK ============================== -->
+<section id="tab-benchmark" class="tab-panel">
+  <div class="side-grid">
+    <aside class="card">
+      <h2>Benchmark</h2>
+      <form id="benchForm" autocomplete="off">
+        <label>Player <select id="benchPlayer"></select></label>
+        <fieldset>
+          <legend>Difficulties</legend>
+          <label class="toggle"><input type="checkbox" name="benchDiff" value="beginner" checked> Beginner</label>
+          <label class="toggle"><input type="checkbox" name="benchDiff" value="intermediate" checked> Intermediate</label>
+          <label class="toggle"><input type="checkbox" name="benchDiff" value="expert" checked> Expert</label>
+        </fieldset>
+        <div class="grid2">
+          <label>Boards / difficulty <input type="number" id="benchBoards" min="10" max="10000" value="500"></label>
+          <label>Processes <input type="number" id="benchProcs" min="1"></label>
+        </div>
+        <label class="toggle"><input type="checkbox" id="benchQuality"> Count forced guesses and blunders (slower)</label>
+        <p class="hint">Every player plays the same seeded boards, opened on the centre cell, so results
+          compare directly. Training never uses these seeds.</p>
+        <div class="buttons">
+          <button type="submit" class="primary" id="btnBench">Run benchmark</button>
+          <button type="button" class="danger" id="btnBenchCancel" hidden>Cancel</button>
+        </div>
+        <div class="progress" id="benchProgress" hidden><div class="progress-fill"></div></div>
+        <p class="hint" id="benchStatus"></p>
+        <p class="error" id="benchError" role="alert"></p>
+      </form>
+    </aside>
+    <div>
+      <div class="card">
+        <h2>Result <span class="muted" id="benchResultInfo"></span></h2>
+        <div class="table-scroll" id="benchResult"><p class="empty-note">Run a benchmark, or pick one from the history below.</p></div>
+        <p class="hint" style="margin-top:10px">Win rate with its Wilson 95% interval. Random and solver rows
+          are the newest results of those baselines on the same number of boards.</p>
+      </div>
+      <div class="card">
+        <h2>History</h2>
+        <div class="table-scroll tall">
+          <table class="data-table clickable">
+            <thead><tr><th>When</th><th>Player</th><th class="num">Boards</th><th>Beginner</th><th>Intermediate</th><th>Expert</th></tr></thead>
+            <tbody id="benchHistory"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>
